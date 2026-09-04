@@ -1,0 +1,43 @@
+# ---- Secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Terraform (plan.md §11) ---------------------------------------------
+# State stores secret values in PLAINTEXT. Never commit it.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+
+# ---- Python / FastAPI BFF ------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / React SPA ----------------------------------------------------
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# ---- Azure / tooling -----------------------------------------------------
+.azure/
+*.publishsettings
+
+# ---- Editors & OS --------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
