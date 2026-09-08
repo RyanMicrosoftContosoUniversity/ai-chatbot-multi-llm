@@ -1,5 +1,13 @@
 # Why This System Has No Client Secrets
 
+> **Credential background with historical examples.** Current deployment uses
+> separate SWA/ACA apps and [this runbook](split-deployment.md). App registrations
+> still need no client secret, but GitHub's SWA upload uses a separately protected
+> deployment token. Use a preauthorized user-assigned identity for initial private
+> image pull; ACA's platform Key Vault reference injects the APIM key at runtime.
+> For v2 tokens, the audience is the API client-ID GUID, not the older URI shown
+> in the historical credential diagram below.
+
 Companion to `deployment-guide.md` and `plan.md`. A deep dive on the credential model: what a secret actually buys you, why neither app registration needs one, and what replaces them at each hop.
 
 **The short version:** across two app registrations, three Azure data services, an API gateway, and a model endpoint, this design contains exactly **one** long-lived secret — the APIM subscription key — and it lives in Key Vault and is read with a managed identity. Everything else authenticates with cryptographic proofs that are either public, ephemeral, or issued by the platform on demand.
@@ -127,7 +135,7 @@ The BFF fetches those keys (cached, refreshed on `kid` miss for rotation) and ch
 |---|---|---|
 | signature | Verifies against Entra's public key for `kid` | Forged or tampered token |
 | `iss` | `https://login.microsoftonline.com/<your-tenant>/v2.0` | Token from another tenant |
-| `aud` | `api://<api-client-id>` — your `ENTRA_API_AUDIENCE` | **Token minted for a different app, replayed here** |
+| `aud` | API client-ID GUID from `ENTRA_API_CLIENT_ID` for v2 access tokens, not the `api://...` scope URI | **Token minted for a different app, replayed here** |
 | `scp` | contains `chat.access` | Token lacks this permission |
 | `exp` / `nbf` | within validity window | Expired or not yet valid |
 | `tid` | your tenant ID | Cross-tenant token |
@@ -280,7 +288,10 @@ az containerapp show -n ca-multillm-chat -g multi-llm-chatbot-rg --query identit
 az cosmosdb sql role assignment list -a cosmos-multillm -g multi-llm-chatbot-rg -o table
 ```
 
-Inspect a real token at [jwt.ms](https://jwt.ms) during development and confirm `aud`, `scp`, `tid`, and `oid` are what the BFF expects. Paste-decoding a token once is worth more than reading three articles about claims.
+Inspect claims using an approved local decoder during development and confirm
+`aud`, `scp`, `tid`, and `oid` match the BFF's expectations. Do not paste live
+bearer tokens into websites, tickets, logs or chat. Decoding alone is not
+signature/authorization validation.
 
 ---
 

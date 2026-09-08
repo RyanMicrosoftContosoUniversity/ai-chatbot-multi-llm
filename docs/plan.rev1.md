@@ -1,5 +1,11 @@
 # Multi-LLM Chatbot on Microsoft Foundry — Design Notes
 
+> **Historical first design revision, not an implementation runbook.**
+> Its single-container/non-streaming-first recommendations are superseded by
+> [the current README](../README.md), [split deployment](split-deployment.md)
+> and [API contract](api-contract.md). Do not copy this document back to the
+> root or use it to provision or modify shared resources.
+
 > **Destination:** on approval, copy to `C:\Users\rharrington\repos\ai-chatbot-multi-llm\plan.md` (repo root, as requested).
 
 **Status:** design discussion. Nothing is being implemented yet.

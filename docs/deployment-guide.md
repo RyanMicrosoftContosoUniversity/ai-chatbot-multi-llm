@@ -1,5 +1,13 @@
 # Manual Deployment Guide
 
+> **Historical resource/setup record, not the current deployment runbook.**
+> Use [split-deployment.md](split-deployment.md), the [backend README](../back-end/README.md)
+> and [API contract](api-contract.md) for the implemented SWA + ACA applications.
+> The commands below predate that split and are not authorization to create
+> resources or modify shared Foundry. Recorded inventory is not freshly verified.
+> In particular, replace the old single-container/root build, identity-bootstrap,
+> audience, body-rewrite and quota examples with the current runbook.
+
 Companion to `plan.md`. Ordered, dependency-aware build sequence for deploying by hand (portal + `az` CLI), with Terraform deferred.
 
 **Target resource group:** `multi-llm-chatbot-rg`
@@ -613,21 +621,15 @@ Then swap `model` to `luna` and `deepseek`. **All three must work here before yo
 
 > **If only `deepseek` fails with `PermissionDenied`,** it is §4.3, not your routing. Prove it by calling the `/models` route directly with your own token (the Stage 3 test) — if that succeeds while the gateway does not, the route and body are correct and the gap is APIM's managed identity.
 
-> **A convenience script.** `request.ps1` in the repo root wraps all of the above and takes the alias as an argument: `.\request.ps1 luna`. It prints the reply, the backend model, and the token count. Note the two commands below must stay on **separate lines** — collapsing them onto one produces `ConvertTo-Json : A parameter cannot be found that matches parameter name 'Method'`, because the pipeline swallows `Invoke-RestMethod`'s arguments.
+> **Historical non-streaming smoke script.** `docs\request.ps1` takes the alias as an argument: `.\docs\request.ps1 luna` from the repository root. It is not the application's authenticated browser/SSE test and may incur model charges; use only with explicit approval. Its output includes the reply, backend model and token count.
 
 > ℹ️ **Two observations from the first live response, worth recording.**
 >
-> **1. The façade leaks on the way back.** The response body carries `"model": "gpt-4o-2024-08-06"` — the real deployment, not your alias. Requests are decoupled; responses are not. If the BFF or React ever keys off `response.model`, the coupling §4.4.0 exists to prevent is back. Fix in outbound policy when convenient:
-> ```xml
-> <outbound>
->   <base />
->   <set-body><![CDATA[@{
->       var b = context.Response.Body.As<JObject>(true);
->       b["model"] = (string)context.Variables["modelAlias"];
->       return b.ToString();
->   }]]></set-body>
-> </outbound>
-> ```
+> **1. Provider model names are not the application's alias contract.** Do not
+> rewrite streamed response bodies with `Body.As<JObject>()` or `set-body`: SSE
+> is not one JSON document and the transformation can buffer or break streaming.
+> The current BFF emits the selected, validated alias in `meta`; React does not
+> key off the raw provider `model`. See [streaming-operations.md](streaming-operations.md).
 >
 > **2. Content filtering is already on.** Responses include `content_filter_results` and `prompt_filter_results` from Azure OpenAI's built-in filter on the Foundry deployment. That is *not* the same as the `llm-content-safety` policy deferred in §9 — you have baseline per-deployment safety today, and the deferred work is centralised, configurable enforcement at the gateway. This lowers the urgency of §9.3 but does not remove it: the built-in filter is not configurable from APIM and does not cover the semantic cache.
 
@@ -753,7 +755,7 @@ The one legitimate use is a system that genuinely cannot do Azure AD — an on-p
 Build the single-container image (`plan.md` §8 — React bundle served by FastAPI). ACR builds server-side, so **you don't need local Docker**:
 
 ```powershell
-az acr build -r crmultillmcontosouniversity -t multillm-chat:v1 .
+az acr build -r <existing-registry-name> -t multillm-bff:<commit-sha> .\back-end
 ```
 
 > **There is no portal equivalent for this step.** The portal offers **Tasks**, which build on a git commit trigger — more machinery than this project needs right now. Create the registry in the portal if you prefer, but the build comes back to the CLI.
@@ -903,7 +905,11 @@ The `User` dimension above closes the second gap. Earlier drafts of this guide h
 - Consider dropping `ApiId`; with one API it adds a dimension and no information.
 - Alerts and dashboards should aggregate. Split by `User` only when investigating a specific case.
 
-**Verify both halves before moving on.** Send a few requests as two different `x-user-id` values, then confirm in App Insights → Metrics that `multillm-chat` splits by `User` — and separately that exceeding `token-quota` actually returns 429 for one user while the other is unaffected. A blank or `anon` dimension means `x-user-id` is not arriving; check the BFF, not the policy.
+**Current interpretation:** token-rate exhaustion returns 429; recognized
+`token-quota` exhaustion returns 403. Test through validated BFF identities under
+an approved bounded test plan, not spoofed browser `x-user-id` values or deliberate
+paid quota exhaustion. Do not enable raw user-ID metric dimensions by default.
+See [streaming-operations.md](streaming-operations.md) for safe diagnostics.
 
 **Notes:**
 

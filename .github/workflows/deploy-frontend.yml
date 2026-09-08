@@ -1,0 +1,63 @@
+name: Deploy frontend (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Deploy this default-branch commit to the existing static site?
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-frontend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirm && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: frontend-production
+    env:
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      VITE_ENTRA_TENANT_ID: ${{ vars.VITE_ENTRA_TENANT_ID }}
+      VITE_ENTRA_SPA_CLIENT_ID: ${{ vars.VITE_ENTRA_SPA_CLIENT_ID }}
+      VITE_ENTRA_API_SCOPE: ${{ vars.VITE_ENTRA_API_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require public build configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in VITE_API_BASE_URL VITE_ENTRA_TENANT_ID VITE_ENTRA_SPA_CLIENT_ID VITE_ENTRA_API_SCOPE; do
+            test -n "${!name}" || { echo "::error::Missing environment variable $name"; exit 1; }
+          done
+          [[ "$VITE_API_BASE_URL" == https://* ]] || { echo "::error::Production API must use HTTPS"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - name: Install, test and build static assets
+        working-directory: front-end
+        run: |
+          npm ci
+          npm run test -- --run
+          npm run build
+      - name: Upload assets only to the existing SWA
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: front-end/dist
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+          production_branch: ${{ github.event.repository.default_branch }}

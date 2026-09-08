@@ -1,3 +1,8 @@
+> **Historical discussion summary.** The single-container and build-order
+> recommendations below are superseded by [the current README](../README.md),
+> [split deployment](split-deployment.md) and [API contract](api-contract.md).
+> Do not copy old plans to the root or infer current resource state from this note.
+
 Design notes written (not code — you're implementing this yourself). Plan mode blocked writing to the repo root, so it's staged in the session folder; approving this copies it to  .\plan.md .
 The finding that changes your design: APIM has a unified model API (preview) — one OpenAI-compatible endpoint that auto-translates to Anthropic Messages format. Your three models don't share a wire protocol, so this replaces an adapter layer you'd otherwise hand-
 write.

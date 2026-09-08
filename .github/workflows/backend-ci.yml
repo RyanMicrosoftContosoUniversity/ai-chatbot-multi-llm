@@ -1,0 +1,56 @@
+name: Backend validation
+
+on:
+  push:
+    paths:
+      - 'back-end/**'
+      - 'docs/api-contract.md'
+      - '.github/workflows/backend-ci.yml'
+      - '.github/workflows/deploy-backend.yml'
+  pull_request:
+    paths:
+      - 'back-end/**'
+      - 'docs/api-contract.md'
+      - '.github/workflows/backend-ci.yml'
+      - '.github/workflows/deploy-backend.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.12', '3.13']
+    defaults:
+      run:
+        working-directory: back-end
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.7'
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-dependency-glob: back-end/uv.lock
+      - run: uv sync --locked
+      - run: uv run --frozen pytest
+      - run: uv run --frozen ruff check .
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build Python-only runtime
+        run: docker build --tag multillm-bff:ci back-end
+      - name: Check installed package and prompt without starting the API
+        run: >-
+          docker run --rm --entrypoint python multillm-bff:ci
+          -c "import os; from importlib.resources import files; import app.main;
+          assert os.getuid() == 10001;
+          assert files('app').joinpath('prompts/system_v1.txt').read_text().strip()"

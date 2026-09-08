@@ -1,5 +1,13 @@
 # Multi-LLM Chatbot on Microsoft Foundry — Design Notes
 
+> **Historical design, superseded for implementation and deployment.**
+> Current hosting is independent React on SWA plus FastAPI on ACA, direct
+> cross-origin streaming, tenant users with delegated permission, and optional
+> Cosmos history. Use [the root README](../README.md),
+> [split deployment](split-deployment.md), and [API contract](api-contract.md).
+> Older ACA-only, owner-only and resource-mutation decisions below are not the
+> current instructions; shared Foundry remains read-only.
+
 **Status:** design discussion, revision 3. Nothing implemented yet.
 **Owner:** Ryan Harrington
 **Subscription:** `<your-subscription>` — resolve with `az account show --query id -o tsv`

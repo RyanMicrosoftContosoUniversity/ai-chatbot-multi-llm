@@ -1,0 +1,19 @@
+# Build-context allowlist: local credentials, virtual environments and test
+# artifacts are not sent to the builder, even if a COPY is later broadened.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!app/
+!app/**
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+**/credentials*
+**/secrets/

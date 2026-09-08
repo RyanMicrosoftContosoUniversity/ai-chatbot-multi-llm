@@ -1,0 +1,122 @@
+name: Deploy backend (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Deploy this default-branch commit to the existing backend?
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirm && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: backend-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_RESOURCE_GROUP: ${{ vars.ACR_RESOURCE_GROUP }}
+      ACR_REPOSITORY: ${{ vars.ACR_REPOSITORY }}
+      ACA_RESOURCE_GROUP: ${{ vars.ACA_RESOURCE_GROUP }}
+      ACA_NAME: ${{ vars.ACA_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require configured deployment target
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ACR_NAME ACR_RESOURCE_GROUP ACR_REPOSITORY ACA_RESOURCE_GROUP ACA_NAME; do
+            test -n "${!name}" || { echo "::error::Missing environment variable $name"; exit 1; }
+          done
+          [[ "$ACR_REPOSITORY" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]]
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.7'
+          python-version: '3.12'
+      - name: Validate backend
+        working-directory: back-end
+        run: |
+          uv sync --locked
+          uv run --frozen pytest
+          uv run --frozen ruff check .
+      - name: Build locally on the runner, not with ACR Tasks
+        run: docker build --tag "multillm-bff:${GITHUB_SHA}" back-end
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Check existing resources and push immutable release
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          server="$(az acr show --name "$ACR_NAME" --resource-group "$ACR_RESOURCE_GROUP" --query loginServer --output tsv)"
+          [[ "$server" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]] || { echo "::error::Invalid registry login server"; exit 1; }
+          app="$(az containerapp show --name "$ACA_NAME" --resource-group "$ACA_RESOURCE_GROUP" \
+            --query '{mode:properties.configuration.activeRevisionsMode,ingress:properties.configuration.ingress,containers:properties.template.containers[].{name:name,command:command,args:args},registries:properties.configuration.registries[].{server:server,identity:identity}}' --output json)"
+          echo "$app" | jq -e --arg server "$server" '
+            .mode == "Single" and .ingress.external == true and .ingress.targetPort == 8000
+            and .ingress.allowInsecure != true
+            and (.containers | length) == 1
+            and ((.containers[0].command // []) | length) == 0
+            and ((.containers[0].args // []) | length) == 0
+            and any(.registries[]; .server == $server and (.identity // "") != "")
+          ' > /dev/null || { echo "::error::Prepare single-revision ACA ingress, runtime command and managed image pull first"; exit 1; }
+          container="$(echo "$app" | jq -r '.containers[0].name')"
+          az acr login --name "$ACR_NAME"
+          tag="$ACR_REPOSITORY:$GITHUB_SHA"
+          docker tag "multillm-bff:$GITHUB_SHA" "$server/$tag"
+          docker push "$server/$tag"
+          digest="$(az acr repository show --name "$ACR_NAME" --image "$tag" --query digest --output tsv)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::Registry returned an invalid image digest"; exit 1; }
+          az acr repository update --name "$ACR_NAME" --image "$tag" \
+            --write-enabled false --delete-enabled false --output none
+          az acr repository update --name "$ACR_NAME" --image "$ACR_REPOSITORY@$digest" \
+            --write-enabled false --delete-enabled false --output none
+          echo "reference=$server/$ACR_REPOSITORY@$digest" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+      - name: Update existing backend only
+        env:
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+          CONTAINER_NAME: ${{ steps.image.outputs.container }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(az containerapp update --name "$ACA_NAME" --resource-group "$ACA_RESOURCE_GROUP" \
+            --container-name "$CONTAINER_NAME" --image "$IMAGE_REFERENCE" \
+            --min-replicas 1 --max-replicas 1 --query properties.latestRevisionName --output tsv)"
+          test -n "$revision" || { echo "::error::Update returned no revision"; exit 1; }
+          ready=false
+          for attempt in {1..60}; do
+            state="$(az containerapp show --name "$ACA_NAME" --resource-group "$ACA_RESOURCE_GROUP" \
+              --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,state:properties.provisioningState}' --output json)"
+            if echo "$state" | jq -e --arg revision "$revision" '.state == "Succeeded" and .latest == $revision and .ready == $revision' > /dev/null; then
+              ready=true
+              break
+            fi
+            if echo "$state" | jq -e '.state == "Failed"' > /dev/null; then
+              echo "::error::Container App provisioning failed"
+              exit 1
+            fi
+            sleep 10
+          done
+          test "$ready" = true || { echo "::error::New revision did not become ready"; exit 1; }
+          fqdn="$(az containerapp show --name "$ACA_NAME" --resource-group "$ACA_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)"
+          [[ "$fqdn" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+$ ]]
+          curl --fail --silent --show-error --max-time 20 "https://$fqdn/health/ready"
+          printf '\nDeployed `%s` to `%s`, revision `%s`.\n' "$IMAGE_REFERENCE" "$ACA_NAME" "$revision" >> "$GITHUB_STEP_SUMMARY"
